@@ -1,0 +1,13 @@
+flowchart LR
+    Client[Cliente] --> API[API WebFlux]
+    API --> Service[TicketService: reglas y retries]
+    Service --> Port[TicketStore: puerto]
+    Port --> Adapter[DynamoStore: SDK asíncrono]
+    Adapter --> Dynamo[(DynamoDB: inventario, orden, auditoría, outbox)]
+    Publisher[Workers.publish] -->|consulta outbox GSI| Adapter
+    Publisher -->|SendMessage| SQS[SQS Standard]
+    SQS -->|ReceiveMessage| Consumer[Workers.consume]
+    Consumer --> Service
+    Expirer[Workers.expire cada segundo] --> Service
+    SQS -->|8 recepciones fallidas| DLQ[DLQ]
+    Consumer -->|DeleteMessage después del commit| SQS

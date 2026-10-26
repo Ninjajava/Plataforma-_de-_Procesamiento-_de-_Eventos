@@ -1,0 +1,12 @@
+aws_region     = "us-east-1"
+aws_account_id = "210987654321"
+environment    = "prod"
+owner          = "ticketing-team"
+cost_center    = "production"
+vpc_cidr       = "10.52.0.0/16"
+client_cidrs   = ["10.98.0.0/24"]
+certificate_arn = "arn:aws:acm:us-east-1:210987654321:certificate/REPLACE_WITH_REAL_CERTIFICATE"
+enable_service = false
+minimum_tasks  = 2
+maximum_tasks  = 6
+# Authenticate clients and complete the production acceptance checks before exposure.

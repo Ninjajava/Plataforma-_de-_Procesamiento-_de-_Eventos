@@ -1,0 +1,582 @@
+{
+  "info": {
+    "name": "Reactive Ticketing - Main Flows",
+    "description": "Run from request 01 using Collection Runner with 500 ms request delay. Creates isolated event and fresh idempotency keys. Polling is bounded to 60 attempts. Requires running API, DynamoDB and SQS.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "adminKey",
+      "value": "local-demo-change-me"
+    },
+    {
+      "key": "eventId",
+      "value": ""
+    },
+    {
+      "key": "orderId",
+      "value": ""
+    },
+    {
+      "key": "giftId",
+      "value": ""
+    },
+    {
+      "key": "rejectedId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "01 Create event",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/events",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Postman Concert\",\n  \"date\": \"2099-06-01T01:00:00Z\",\n  \"venue\": \"Bogota\",\n  \"capacity\": 5\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Created\", () => pm.response.to.have.status(201));",
+              "pm.collectionVariables.set(\"eventId\", pm.response.json().id);"
+            ]
+          }
+        },
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const run = Date.now();",
+              "pm.collectionVariables.set(\"orderId\", \"purchase-\" + run);",
+              "pm.collectionVariables.set(\"giftId\", \"gift-\" + run);",
+              "pm.collectionVariables.set(\"rejectedId\", \"rejected-\" + run);",
+              "pm.collectionVariables.unset(\"orderIdPoll\");",
+              "pm.collectionVariables.unset(\"giftIdPoll\");",
+              "pm.collectionVariables.unset(\"rejectedIdPoll\");"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 List events",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/events"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"OK\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Submit purchase",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{orderId}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"customerId\": \"customer-001\",\n  \"quantity\": 2\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Accepted\", () => pm.response.to.have.status(202));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 Repeat identical purchase",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{orderId}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"customerId\": \"customer-001\",\n  \"quantity\": 2\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Accepted\", () => pm.response.to.have.status(202));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 Wait for reservation",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/orders/{{orderId}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Order is readable\", () => pm.response.to.have.status(200));",
+              "const state = pm.response.json().order.status;",
+              "if (state !== \"RESERVED\") {",
+              "  const attempts = Number(pm.collectionVariables.get(\"orderIdPoll\") || 0) + 1;",
+              "  pm.collectionVariables.set(\"orderIdPoll\", attempts);",
+              "  pm.test(\"Expected state remains reachable\", () => pm.expect([\"QUEUED\", \"PENDING_CONFIRMATION\"]).to.include(state));",
+              "  pm.test(\"Polling stays bounded\", () => pm.expect(attempts).to.be.below(61));",
+              "  pm.execution.setNextRequest(attempts < 60 && [\"QUEUED\", \"PENDING_CONFIRMATION\"].includes(state) ? \"05 Wait for reservation\" : null);",
+              "} else {",
+              "  pm.collectionVariables.unset(\"orderIdPoll\");",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 Confirm purchase",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": "{{baseUrl}}/api/orders/{{orderId}}/confirm"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Accepted\", () => pm.response.to.have.status(202));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 Wait for sale",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/orders/{{orderId}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Order is readable\", () => pm.response.to.have.status(200));",
+              "const state = pm.response.json().order.status;",
+              "if (state !== \"SOLD\") {",
+              "  const attempts = Number(pm.collectionVariables.get(\"orderIdPoll\") || 0) + 1;",
+              "  pm.collectionVariables.set(\"orderIdPoll\", attempts);",
+              "  pm.test(\"Expected state remains reachable\", () => pm.expect([\"QUEUED\", \"PENDING_CONFIRMATION\"]).to.include(state));",
+              "  pm.test(\"Polling stays bounded\", () => pm.expect(attempts).to.be.below(61));",
+              "  pm.execution.setNextRequest(attempts < 60 && [\"QUEUED\", \"PENDING_CONFIRMATION\"].includes(state) ? \"07 Wait for sale\" : null);",
+              "} else {",
+              "  pm.collectionVariables.unset(\"orderIdPoll\");",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 Repeat confirmation",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": "{{baseUrl}}/api/orders/{{orderId}}/confirm"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Accepted\", () => pm.response.to.have.status(202));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 Audit history",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/orders/{{orderId}}/audit"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"OK\", () => pm.response.to.have.status(200));",
+              "pm.test(\"History contains sale\", () => pm.expect(pm.response.json().some(entry => entry.to === \"SOLD\")).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 Submit courtesy",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Admin-Key",
+            "value": "{{adminKey}}"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{giftId}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/complimentary-orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"customerId\": \"customer-001\",\n  \"quantity\": 1\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Accepted\", () => pm.response.to.have.status(202));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 Wait for courtesy",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/orders/{{giftId}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Order is readable\", () => pm.response.to.have.status(200));",
+              "const state = pm.response.json().order.status;",
+              "if (state !== \"COMPLIMENTARY\") {",
+              "  const attempts = Number(pm.collectionVariables.get(\"giftIdPoll\") || 0) + 1;",
+              "  pm.collectionVariables.set(\"giftIdPoll\", attempts);",
+              "  pm.test(\"Expected state remains reachable\", () => pm.expect([\"QUEUED\", \"PENDING_CONFIRMATION\"]).to.include(state));",
+              "  pm.test(\"Polling stays bounded\", () => pm.expect(attempts).to.be.below(61));",
+              "  pm.execution.setNextRequest(attempts < 60 && [\"QUEUED\", \"PENDING_CONFIRMATION\"].includes(state) ? \"11 Wait for courtesy\" : null);",
+              "} else {",
+              "  pm.collectionVariables.unset(\"giftIdPoll\");",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "12 Verify inventory",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/events/{{eventId}}/availability"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Inventory is conserved and courtesy is not a sale\", () => { const inventory = pm.response.json(); pm.expect(inventory.available).to.eql(2); pm.expect(inventory.sold).to.eql(2); pm.expect(inventory.complimentary).to.eql(1); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "13 Reject changed idempotent payload",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{orderId}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"customerId\": \"customer-001\",\n  \"quantity\": 1\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Conflict\", () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "14 Submit request exceeding remaining inventory",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{rejectedId}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"customerId\": \"customer-001\",\n  \"quantity\": 3\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Accepted\", () => pm.response.to.have.status(202));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "15 Wait for rejection",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/orders/{{rejectedId}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Order is readable\", () => pm.response.to.have.status(200));",
+              "const state = pm.response.json().order.status;",
+              "if (state !== \"REJECTED\") {",
+              "  const attempts = Number(pm.collectionVariables.get(\"rejectedIdPoll\") || 0) + 1;",
+              "  pm.collectionVariables.set(\"rejectedIdPoll\", attempts);",
+              "  pm.test(\"Expected state remains reachable\", () => pm.expect([\"QUEUED\", \"PENDING_CONFIRMATION\"]).to.include(state));",
+              "  pm.test(\"Polling stays bounded\", () => pm.expect(attempts).to.be.below(61));",
+              "  pm.execution.setNextRequest(attempts < 60 && [\"QUEUED\", \"PENDING_CONFIRMATION\"].includes(state) ? \"15 Wait for rejection\" : null);",
+              "} else {",
+              "  pm.collectionVariables.unset(\"rejectedIdPoll\");",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "16 Reject invalid quantity",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "invalid-quantity"
+          }
+        ],
+        "url": "{{baseUrl}}/api/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"customerId\": \"customer-001\",\n  \"quantity\": 0\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Validation failure\", () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "17 Reject unauthorized courtesy",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Admin-Key",
+            "value": "wrong"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "unauthorized-gift"
+          }
+        ],
+        "url": "{{baseUrl}}/api/complimentary-orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"customerId\": \"customer-001\",\n  \"quantity\": 1\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Forbidden\", () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "18 Missing order",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/orders/missing-order"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Not found\", () => pm.response.to.have.status(404));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

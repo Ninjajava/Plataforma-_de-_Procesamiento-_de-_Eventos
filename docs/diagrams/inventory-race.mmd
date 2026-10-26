@@ -1,0 +1,16 @@
+sequenceDiagram
+    autonumber
+    participant A as Consumidor A
+    participant B as Consumidor B
+    participant DB as DynamoDB
+    A->>DB: Leer evento: available = 1
+    B->>DB: Leer evento: available = 1
+    A->>DB: Transacción: orden A QUEUED + available >= 1
+    DB-->>A: Commit: available = 0, reserved = 1
+    B->>DB: Transacción: orden B QUEUED + available >= 1
+    DB-->>B: Condición rechazada; nada de B se persiste
+    B->>DB: Retry con backoff: releer orden B y evento
+    DB-->>B: Orden B QUEUED, available = 0
+    B->>DB: Transacción: B QUEUED → REJECTED + audit
+    DB-->>B: Commit sin movimiento de inventario
+    Note over A,DB: Leer disponibilidad no concede cupo: la condición del commit decide

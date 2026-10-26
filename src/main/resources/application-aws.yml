@@ -1,0 +1,6 @@
+database:
+  endpoint: https://dynamodb.${AWS_REGION:us-east-1}.amazonaws.com
+  table: ${DYNAMODB_TABLE}
+queue:
+  endpoint: https://sqs.${AWS_REGION:us-east-1}.amazonaws.com
+  url: ${SQS_URL}

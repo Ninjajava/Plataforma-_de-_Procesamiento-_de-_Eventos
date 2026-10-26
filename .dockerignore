@@ -1,0 +1,7 @@
+target
+.git
+reports
+*.log
+infra
+docs
+postman

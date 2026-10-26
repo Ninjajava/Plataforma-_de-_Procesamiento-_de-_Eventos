@@ -1,0 +1,11 @@
+{
+  "date": "2026-10-26",
+  "java": "25.0.4.1",
+  "port": 8091,
+  "readiness": {
+    "status": "UP"
+  },
+  "liveness": {
+    "status": "UP"
+  }
+}

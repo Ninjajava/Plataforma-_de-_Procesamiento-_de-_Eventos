@@ -1,0 +1,12 @@
+target/
+.idea/
+*.log
+!reports/**/build.log
+.env
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+crash.log

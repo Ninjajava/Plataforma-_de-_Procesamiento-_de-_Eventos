@@ -1,0 +1,36 @@
+sequenceDiagram
+    autonumber
+    actor Client as Cliente
+    participant API as API WebFlux
+    participant UseCase as TicketService
+    participant DB as DynamoDB
+    participant Publisher as Publicador
+    participant Queue as SQS
+    participant Consumer as Consumidor
+    Client->>API: POST /orders + Idempotency-Key
+    API->>UseCase: buy(...)
+    UseCase->>DB: GetItem evento (consistentRead)
+    UseCase->>DB: TransactWrite: QUEUED + audit + outbox
+    DB-->>UseCase: Commit
+    UseCase-->>API: Orden
+    API-->>Client: 202 + orderId (sin cupo garantizado)
+    Publisher->>DB: Query GSI OUTBOX
+    DB-->>Publisher: Mensaje pendiente (eventual)
+    Publisher->>Queue: SendMessage(orderId)
+    Queue-->>Publisher: Acuse
+    Publisher->>DB: Delete outbox
+    Queue-->>Consumer: ReceiveMessage(orderId)
+    Consumer->>UseCase: reserve(orderId)
+    UseCase->>DB: GetItem orden y evento (consistentRead)
+    alt Cupo suficiente
+        UseCase->>DB: TransactWrite: expected QUEUED + available >= quantity + audit
+        DB-->>UseCase: Commit RESERVED y vencimiento +600 s
+    else Sin cupo
+        UseCase->>DB: TransactWrite: expected QUEUED → REJECTED + audit
+        DB-->>UseCase: Commit
+    end
+    UseCase-->>Consumer: Operación completada
+    Consumer->>Queue: DeleteMessage
+    Client->>API: GET /orders/{id}
+    API->>DB: Lectura consistente a través del caso de uso y adaptador
+    DB-->>Client: Estado actual a través de la API

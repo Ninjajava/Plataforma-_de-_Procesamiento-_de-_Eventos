@@ -1,0 +1,135 @@
+{
+  "info": {
+    "name": "Reactive Ticketing - Reservation Expiration (10 minutes)",
+    "description": "Optional slow flow. Run all requests with Collection Runner delay of 1000 ms. The reservation is never confirmed and must expire after 600 seconds; bounded polling allows release/queue lag.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "eventId",
+      "value": ""
+    },
+    {
+      "key": "orderId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "01 Create expiration event",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/events",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Expiration Test\",\n  \"date\": \"2099-06-01T00:00:00Z\",\n  \"venue\": \"Test\",\n  \"capacity\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.response.to.have.status(201);",
+              "pm.collectionVariables.set(\"eventId\", pm.response.json().id);",
+              "pm.collectionVariables.set(\"orderId\", \"expiry-\" + Date.now());",
+              "pm.collectionVariables.set(\"polls\", 0);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 Submit unconfirmed order",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/orders",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{orderId}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"customerId\": \"customer-expiry\",\n  \"quantity\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.response.to.have.status(202);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Wait for expiration",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/orders/{{orderId}}",
+        "header": []
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.response.to.have.status(200);",
+              "const state = pm.response.json().order.status;",
+              "if (state !== \"EXPIRED\") {",
+              "  const polls = Number(pm.collectionVariables.get(\"polls\")) + 1;",
+              "  pm.collectionVariables.set(\"polls\", polls);",
+              "  pm.test(\"Order is waiting or reserved\", () => pm.expect([\"QUEUED\", \"RESERVED\"]).to.include(state));",
+              "  pm.test(\"Expiry is bounded\", () => pm.expect(polls).to.be.below(701));",
+              "  pm.execution.setNextRequest(polls < 700 && [\"QUEUED\", \"RESERVED\"].includes(state) ? \"03 Wait for expiration\" : null);",
+              "} else {",
+              "  pm.test(\"Expired order has no allocated tickets\", () => pm.expect(pm.response.json().ticketState).to.eql(null));",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 Verify released inventory",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/events/{{eventId}}/availability",
+        "header": []
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.response.to.have.status(200);",
+              "pm.test(\"All inventory was released\", () => { const inventory = pm.response.json(); pm.expect(inventory.available).to.eql(1); pm.expect(inventory.reserved).to.eql(0); pm.expect(inventory.sold).to.eql(0); });"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

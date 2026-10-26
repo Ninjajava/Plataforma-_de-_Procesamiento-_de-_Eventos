@@ -1,0 +1,387 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>DynamoStore.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">ticketing</a> &gt; <a href="index.source.html" class="el_package">com.example.ticketing.infrastructure</a> &gt; <span class="el_source">DynamoStore.java</span></div><h1>DynamoStore.java</h1><pre class="source lang-java linenums">package com.example.ticketing.infrastructure;
+
+import com.example.ticketing.application.TicketStore;
+import com.example.ticketing.domain.Model.*;
+import java.time.Clock;
+import java.time.Instant;
+import java.util.*;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Repository;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import software.amazon.awssdk.core.exception.SdkClientException;
+import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
+import software.amazon.awssdk.services.dynamodb.model.*;
+
+@Repository
+public class DynamoStore implements TicketStore {
+  private final DynamoDbAsyncClient client;
+  private final String table;
+  private final Clock clock;
+
+  public DynamoStore(
+<span class="fc" id="L23">      DynamoDbAsyncClient client, @Value(&quot;${database.table}&quot;) String table, Clock clock) {</span>
+<span class="fc" id="L24">    this.client = client;</span>
+<span class="fc" id="L25">    this.table = table;</span>
+<span class="fc" id="L26">    this.clock = clock;</span>
+<span class="fc" id="L27">  }</span>
+
+  public Mono&lt;Event&gt; create(Event event) {
+<span class="fc" id="L30">    return Mono.fromFuture(</span>
+            () -&gt;
+<span class="fc" id="L32">                client.putItem(</span>
+<span class="fc" id="L33">                    PutItemRequest.builder()</span>
+<span class="fc" id="L34">                        .tableName(table)</span>
+<span class="fc" id="L35">                        .item(eventItem(event))</span>
+<span class="fc" id="L36">                        .conditionExpression(&quot;attribute_not_exists(pk)&quot;)</span>
+<span class="fc" id="L37">                        .build()))</span>
+<span class="fc" id="L38">        .thenReturn(event)</span>
+<span class="fc" id="L39">        .onErrorMap(this::translate);</span>
+  }
+
+  public Flux&lt;Event&gt; events() {
+<span class="fc" id="L43">    return query(&quot;EVENT&quot;, null).map(this::readEvent);</span>
+  }
+
+  public Mono&lt;Event&gt; event(String id) {
+<span class="fc" id="L47">    return get(&quot;EVENT#&quot; + id).map(this::readEvent);</span>
+  }
+
+  public Mono&lt;Order&gt; order(String id) {
+<span class="fc" id="L51">    return get(&quot;ORDER#&quot; + id).map(this::readOrder);</span>
+  }
+
+  private Mono&lt;Map&lt;String, AttributeValue&gt;&gt; get(String key) {
+<span class="fc" id="L55">    return Mono.fromFuture(</span>
+            () -&gt;
+<span class="fc" id="L57">                client.getItem(</span>
+<span class="fc" id="L58">                    GetItemRequest.builder()</span>
+<span class="fc" id="L59">                        .tableName(table)</span>
+<span class="fc" id="L60">                        .key(Map.of(&quot;pk&quot;, text(key)))</span>
+<span class="fc" id="L61">                        .consistentRead(true)</span>
+<span class="fc" id="L62">                        .build()))</span>
+<span class="fc" id="L63">        .flatMap(</span>
+            response -&gt;
+<span class="fc bfc" id="L65" title="All 2 branches covered.">                response.hasItem()</span>
+<span class="fc" id="L66">                    ? Mono.just(response.item())</span>
+<span class="fc" id="L67">                    : Mono.error(new Missing(&quot;Resource does not exist&quot;)))</span>
+<span class="fc" id="L68">        .onErrorMap(this::translate);</span>
+  }
+
+  public Mono&lt;Order&gt; submit(Order order) {
+<span class="fc" id="L72">    return Mono.defer(</span>
+            () -&gt;
+<span class="fc" id="L74">                write(</span>
+<span class="fc" id="L75">                        List.of(</span>
+<span class="fc" id="L76">                            put(orderItem(order), &quot;attribute_not_exists(pk)&quot;, Map.of(), Map.of()),</span>
+<span class="fc" id="L77">                            TransactWriteItem.builder()</span>
+<span class="fc" id="L78">                                .conditionCheck(</span>
+<span class="fc" id="L79">                                    ConditionCheck.builder()</span>
+<span class="fc" id="L80">                                        .tableName(table)</span>
+<span class="fc" id="L81">                                        .key(Map.of(&quot;pk&quot;, text(&quot;EVENT#&quot; + order.eventId())))</span>
+<span class="fc" id="L82">                                        .conditionExpression(&quot;attribute_exists(pk)&quot;)</span>
+<span class="fc" id="L83">                                        .build())</span>
+<span class="fc" id="L84">                                .build(),</span>
+<span class="fc" id="L85">                            auditItem(order.id(), &quot;NONE&quot;, &quot;QUEUED&quot;),</span>
+<span class="fc" id="L86">                            outboxItem(order.id())))</span>
+<span class="fc" id="L87">                    .thenReturn(order))</span>
+<span class="fc" id="L88">        .onErrorResume(</span>
+            ConcurrentChange.class,
+            error -&gt;
+<span class="fc" id="L91">                order(order.id())</span>
+<span class="fc" id="L92">                    .flatMap(</span>
+                        existing -&gt;
+<span class="fc bfc" id="L94" title="All 2 branches covered.">                            sameRequest(existing, order)</span>
+<span class="fc" id="L95">                                ? Mono.just(existing)</span>
+<span class="fc" id="L96">                                : Mono.error(</span>
+                                    new Conflict(
+                                        &quot;Idempotency key was already used with a different&quot;
+                                            + &quot; request&quot;)))
+<span class="fc" id="L100">                    .onErrorResume(Missing.class, missing -&gt; Mono.error(error)));</span>
+  }
+
+  private boolean sameRequest(Order existing, Order requested) {
+<span class="fc bfc" id="L104" title="All 2 branches covered.">    return existing.eventId().equals(requested.eventId())</span>
+<span class="fc bfc" id="L105" title="All 2 branches covered.">        &amp;&amp; existing.customerId().equals(requested.customerId())</span>
+<span class="fc bfc" id="L106" title="All 2 branches covered.">        &amp;&amp; existing.quantity() == requested.quantity()</span>
+<span class="fc bfc" id="L107" title="All 2 branches covered.">        &amp;&amp; existing.courtesy() == requested.courtesy();</span>
+  }
+
+  public Mono&lt;Order&gt; transition(
+      Order expected,
+      OrderStatus status,
+      Instant expiresAt,
+      TicketState source,
+      TicketState target,
+      boolean enqueue) {
+<span class="fc" id="L117">    return Mono.defer(</span>
+        () -&gt; {
+<span class="fc" id="L119">          Order updated =</span>
+              new Order(
+<span class="fc" id="L121">                  expected.id(),</span>
+<span class="fc" id="L122">                  expected.eventId(),</span>
+<span class="fc" id="L123">                  expected.customerId(),</span>
+<span class="fc" id="L124">                  expected.quantity(),</span>
+                  status,
+                  expiresAt,
+<span class="fc" id="L127">                  expected.createdAt(),</span>
+<span class="fc" id="L128">                  expected.courtesy());</span>
+<span class="fc" id="L129">          List&lt;TransactWriteItem&gt; changes = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L130">          changes.add(</span>
+<span class="fc" id="L131">              put(</span>
+<span class="fc" id="L132">                  orderItem(updated),</span>
+                  &quot;#status = :expected&quot;,
+<span class="fc" id="L134">                  Map.of(&quot;#status&quot;, &quot;status&quot;),</span>
+<span class="fc" id="L135">                  Map.of(&quot;:expected&quot;, text(expected.status().name()))));</span>
+<span class="fc bfc" id="L136" title="All 2 branches covered.">          if (source != null) {</span>
+<span class="fc" id="L137">            changes.add(</span>
+<span class="fc" id="L138">                TransactWriteItem.builder()</span>
+<span class="fc" id="L139">                    .update(</span>
+<span class="fc" id="L140">                        Update.builder()</span>
+<span class="fc" id="L141">                            .tableName(table)</span>
+<span class="fc" id="L142">                            .key(Map.of(&quot;pk&quot;, text(&quot;EVENT#&quot; + expected.eventId())))</span>
+<span class="fc" id="L143">                            .conditionExpression(&quot;#source &gt;= :quantity&quot;)</span>
+<span class="fc" id="L144">                            .updateExpression(</span>
+                                &quot;SET #source = #source - :quantity, #target = #target + :quantity&quot;)
+<span class="fc" id="L146">                            .expressionAttributeNames(</span>
+<span class="fc" id="L147">                                Map.of(&quot;#source&quot;, bucket(source), &quot;#target&quot;, bucket(target)))</span>
+<span class="fc" id="L148">                            .expressionAttributeValues(</span>
+<span class="fc" id="L149">                                Map.of(&quot;:quantity&quot;, number(expected.quantity())))</span>
+<span class="fc" id="L150">                            .build())</span>
+<span class="fc" id="L151">                    .build());</span>
+          }
+<span class="fc" id="L153">          changes.add(auditItem(expected.id(), expected.status().name(), status.name()));</span>
+<span class="fc bfc" id="L154" title="All 2 branches covered.">          if (enqueue) changes.add(outboxItem(expected.id()));</span>
+<span class="fc" id="L155">          return write(changes).thenReturn(updated);</span>
+        });
+  }
+
+  public Flux&lt;Order&gt; expired(Instant cutoff) {
+<span class="fc" id="L160">    return query(&quot;ACTIVE&quot;, sortable(cutoff) + &quot;~&quot;).map(this::readOrder);</span>
+  }
+
+  public Flux&lt;Outbox&gt; outbox() {
+<span class="fc" id="L164">    return query(&quot;OUTBOX&quot;, null)</span>
+<span class="fc" id="L165">        .take(100)</span>
+<span class="fc" id="L166">        .map(item -&gt; new Outbox(string(item, &quot;id&quot;), string(item, &quot;orderId&quot;)));</span>
+  }
+
+  public Mono&lt;Void&gt; delivered(String id) {
+<span class="fc" id="L170">    return Mono.fromFuture(</span>
+            () -&gt;
+<span class="fc" id="L172">                client.deleteItem(</span>
+<span class="fc" id="L173">                    DeleteItemRequest.builder()</span>
+<span class="fc" id="L174">                        .tableName(table)</span>
+<span class="fc" id="L175">                        .key(Map.of(&quot;pk&quot;, text(&quot;OUTBOX#&quot; + id)))</span>
+<span class="fc" id="L176">                        .build()))</span>
+<span class="fc" id="L177">        .then()</span>
+<span class="fc" id="L178">        .onErrorMap(this::translate);</span>
+  }
+
+  public Flux&lt;Audit&gt; audit(String id) {
+<span class="fc" id="L182">    return query(&quot;AUDIT#&quot; + id, null)</span>
+<span class="fc" id="L183">        .map(</span>
+            item -&gt;
+<span class="fc" id="L185">                new Audit(</span>
+<span class="fc" id="L186">                    string(item, &quot;id&quot;),</span>
+                    id,
+<span class="fc" id="L188">                    string(item, &quot;fromState&quot;),</span>
+<span class="fc" id="L189">                    string(item, &quot;toState&quot;),</span>
+<span class="fc" id="L190">                    Instant.parse(string(item, &quot;at&quot;))));</span>
+  }
+
+  private Flux&lt;Map&lt;String, AttributeValue&gt;&gt; query(String kind, String upperBound) {
+    QueryRequest.Builder request =
+<span class="fc" id="L195">        QueryRequest.builder()</span>
+<span class="fc" id="L196">            .tableName(table)</span>
+<span class="fc" id="L197">            .indexName(&quot;kind-sort-index&quot;)</span>
+<span class="fc" id="L198">            .keyConditionExpression(</span>
+<span class="fc bfc" id="L199" title="All 2 branches covered.">                &quot;#kind = :kind&quot; + (upperBound == null ? &quot;&quot; : &quot; AND #sort &lt;= :cutoff&quot;))</span>
+<span class="fc" id="L200">            .expressionAttributeNames(</span>
+<span class="fc bfc" id="L201" title="All 2 branches covered.">                upperBound == null</span>
+<span class="fc" id="L202">                    ? Map.of(&quot;#kind&quot;, &quot;kind&quot;)</span>
+<span class="fc" id="L203">                    : Map.of(&quot;#kind&quot;, &quot;kind&quot;, &quot;#sort&quot;, &quot;sort&quot;))</span>
+<span class="fc" id="L204">            .expressionAttributeValues(</span>
+<span class="fc bfc" id="L205" title="All 2 branches covered.">                upperBound == null</span>
+<span class="fc" id="L206">                    ? Map.of(&quot;:kind&quot;, text(kind))</span>
+<span class="fc" id="L207">                    : Map.of(&quot;:kind&quot;, text(kind), &quot;:cutoff&quot;, text(upperBound)))</span>
+<span class="fc" id="L208">            .limit(100);</span>
+<span class="fc" id="L209">    return Flux.defer(() -&gt; client.queryPaginator(request.build()))</span>
+<span class="fc" id="L210">        .concatMapIterable(QueryResponse::items)</span>
+<span class="fc" id="L211">        .onErrorMap(this::translate);</span>
+  }
+
+  private Mono&lt;Void&gt; write(List&lt;TransactWriteItem&gt; changes) {
+<span class="fc" id="L215">    return Mono.fromFuture(</span>
+            () -&gt;
+<span class="fc" id="L217">                client.transactWriteItems(</span>
+<span class="fc" id="L218">                    TransactWriteItemsRequest.builder()</span>
+<span class="fc" id="L219">                        .transactItems(changes)</span>
+<span class="fc" id="L220">                        .clientRequestToken(UUID.randomUUID().toString())</span>
+<span class="fc" id="L221">                        .build()))</span>
+<span class="fc" id="L222">        .then()</span>
+<span class="fc" id="L223">        .onErrorMap(this::translate);</span>
+  }
+
+  private Throwable translate(Throwable error) {
+<span class="fc bfc" id="L227" title="All 4 branches covered.">    if (error instanceof TransactionCanceledException</span>
+<span class="fc" id="L228">        || error instanceof ConditionalCheckFailedException) return new ConcurrentChange(error);</span>
+<span class="fc bfc" id="L229" title="All 6 branches covered.">    if (error instanceof SdkClientException</span>
+        || error instanceof ProvisionedThroughputExceededException
+<span class="fc" id="L231">        || error instanceof DynamoDbException failure</span>
+<span class="pc bpc" id="L232" title="1 of 4 branches missed.">            &amp;&amp; (failure.isThrottlingException() || failure.statusCode() &gt;= 500))</span>
+<span class="fc" id="L233">      return new TransientStoreFailure(error);</span>
+<span class="fc" id="L234">    return error;</span>
+  }
+
+  private TransactWriteItem put(
+      Map&lt;String, AttributeValue&gt; item,
+      String condition,
+      Map&lt;String, String&gt; names,
+      Map&lt;String, AttributeValue&gt; values) {
+<span class="fc" id="L242">    Put.Builder request = Put.builder().tableName(table).item(item).conditionExpression(condition);</span>
+<span class="fc bfc" id="L243" title="All 2 branches covered.">    if (!names.isEmpty()) request.expressionAttributeNames(names);</span>
+<span class="fc bfc" id="L244" title="All 2 branches covered.">    if (!values.isEmpty()) request.expressionAttributeValues(values);</span>
+<span class="fc" id="L245">    return TransactWriteItem.builder().put(request.build()).build();</span>
+  }
+
+  private TransactWriteItem auditItem(String orderId, String from, String to) {
+<span class="fc" id="L249">    String id = UUID.randomUUID().toString();</span>
+<span class="fc" id="L250">    Map&lt;String, AttributeValue&gt; item =</span>
+<span class="fc" id="L251">        base(&quot;AUDIT#&quot; + id, &quot;AUDIT#&quot; + orderId, sortable(clock.instant()) + id);</span>
+<span class="fc" id="L252">    item.putAll(</span>
+<span class="fc" id="L253">        Map.of(</span>
+            &quot;id&quot;,
+<span class="fc" id="L255">            text(id),</span>
+            &quot;orderId&quot;,
+<span class="fc" id="L257">            text(orderId),</span>
+            &quot;fromState&quot;,
+<span class="fc" id="L259">            text(from),</span>
+            &quot;toState&quot;,
+<span class="fc" id="L261">            text(to),</span>
+            &quot;at&quot;,
+<span class="fc" id="L263">            text(clock.instant().toString())));</span>
+<span class="fc" id="L264">    return put(item, &quot;attribute_not_exists(pk)&quot;, Map.of(), Map.of());</span>
+  }
+
+  private TransactWriteItem outboxItem(String orderId) {
+<span class="fc" id="L268">    String id = UUID.randomUUID().toString();</span>
+<span class="fc" id="L269">    Map&lt;String, AttributeValue&gt; item = base(&quot;OUTBOX#&quot; + id, &quot;OUTBOX&quot;, id);</span>
+<span class="fc" id="L270">    item.putAll(Map.of(&quot;id&quot;, text(id), &quot;orderId&quot;, text(orderId)));</span>
+<span class="fc" id="L271">    return put(item, &quot;attribute_not_exists(pk)&quot;, Map.of(), Map.of());</span>
+  }
+
+  private Map&lt;String, AttributeValue&gt; eventItem(Event event) {
+<span class="fc" id="L275">    Map&lt;String, AttributeValue&gt; item = base(&quot;EVENT#&quot; + event.id(), &quot;EVENT&quot;, event.id());</span>
+<span class="fc" id="L276">    item.putAll(</span>
+<span class="fc" id="L277">        Map.of(</span>
+            &quot;id&quot;,
+<span class="fc" id="L279">            text(event.id()),</span>
+            &quot;name&quot;,
+<span class="fc" id="L281">            text(event.name()),</span>
+            &quot;date&quot;,
+<span class="fc" id="L283">            text(event.date().toString()),</span>
+            &quot;venue&quot;,
+<span class="fc" id="L285">            text(event.venue()),</span>
+            &quot;capacity&quot;,
+<span class="fc" id="L287">            number(event.capacity()),</span>
+            &quot;available&quot;,
+<span class="fc" id="L289">            number(event.available()),</span>
+            &quot;reserved&quot;,
+<span class="fc" id="L291">            number(event.reserved()),</span>
+            &quot;pending&quot;,
+<span class="fc" id="L293">            number(event.pending()),</span>
+            &quot;sold&quot;,
+<span class="fc" id="L295">            number(event.sold()),</span>
+            &quot;complimentary&quot;,
+<span class="fc" id="L297">            number(event.complimentary())));</span>
+<span class="fc" id="L298">    return item;</span>
+  }
+
+  private Map&lt;String, AttributeValue&gt; orderItem(Order order) {
+<span class="fc" id="L302">    Map&lt;String, AttributeValue&gt; item =</span>
+<span class="fc" id="L303">        base(</span>
+<span class="fc" id="L304">            &quot;ORDER#&quot; + order.id(),</span>
+<span class="fc bfc" id="L305" title="All 2 branches covered.">            order.expiresAt() == null ? &quot;ORDER&quot; : &quot;ACTIVE&quot;,</span>
+<span class="fc bfc" id="L306" title="All 2 branches covered.">            order.expiresAt() == null ? order.id() : sortable(order.expiresAt()) + order.id());</span>
+<span class="fc" id="L307">    item.putAll(</span>
+<span class="fc" id="L308">        Map.of(</span>
+            &quot;id&quot;,
+<span class="fc" id="L310">            text(order.id()),</span>
+            &quot;eventId&quot;,
+<span class="fc" id="L312">            text(order.eventId()),</span>
+            &quot;customerId&quot;,
+<span class="fc" id="L314">            text(order.customerId()),</span>
+            &quot;quantity&quot;,
+<span class="fc" id="L316">            number(order.quantity()),</span>
+            &quot;status&quot;,
+<span class="fc" id="L318">            text(order.status().name()),</span>
+            &quot;createdAt&quot;,
+<span class="fc" id="L320">            text(order.createdAt().toString()),</span>
+            &quot;courtesy&quot;,
+<span class="fc" id="L322">            AttributeValue.builder().bool(order.courtesy()).build()));</span>
+<span class="fc bfc" id="L323" title="All 2 branches covered.">    if (order.expiresAt() != null) item.put(&quot;expiresAt&quot;, text(order.expiresAt().toString()));</span>
+<span class="fc" id="L324">    return item;</span>
+  }
+
+  private Event readEvent(Map&lt;String, AttributeValue&gt; item) {
+<span class="fc" id="L328">    return new Event(</span>
+<span class="fc" id="L329">        string(item, &quot;id&quot;),</span>
+<span class="fc" id="L330">        string(item, &quot;name&quot;),</span>
+<span class="fc" id="L331">        Instant.parse(string(item, &quot;date&quot;)),</span>
+<span class="fc" id="L332">        string(item, &quot;venue&quot;),</span>
+<span class="fc" id="L333">        integer(item, &quot;capacity&quot;),</span>
+<span class="fc" id="L334">        integer(item, &quot;available&quot;),</span>
+<span class="fc" id="L335">        integer(item, &quot;reserved&quot;),</span>
+<span class="fc" id="L336">        integer(item, &quot;pending&quot;),</span>
+<span class="fc" id="L337">        integer(item, &quot;sold&quot;),</span>
+<span class="fc" id="L338">        integer(item, &quot;complimentary&quot;));</span>
+  }
+
+  private Order readOrder(Map&lt;String, AttributeValue&gt; item) {
+<span class="fc" id="L342">    return new Order(</span>
+<span class="fc" id="L343">        string(item, &quot;id&quot;),</span>
+<span class="fc" id="L344">        string(item, &quot;eventId&quot;),</span>
+<span class="fc" id="L345">        string(item, &quot;customerId&quot;),</span>
+<span class="fc" id="L346">        integer(item, &quot;quantity&quot;),</span>
+<span class="fc" id="L347">        OrderStatus.valueOf(string(item, &quot;status&quot;)),</span>
+<span class="fc bfc" id="L348" title="All 2 branches covered.">        item.containsKey(&quot;expiresAt&quot;) ? Instant.parse(string(item, &quot;expiresAt&quot;)) : null,</span>
+<span class="fc" id="L349">        Instant.parse(string(item, &quot;createdAt&quot;)),</span>
+<span class="fc" id="L350">        item.get(&quot;courtesy&quot;).bool());</span>
+  }
+
+  private Map&lt;String, AttributeValue&gt; base(String key, String kind, String sort) {
+<span class="fc" id="L354">    return new HashMap&lt;&gt;(Map.of(&quot;pk&quot;, text(key), &quot;kind&quot;, text(kind), &quot;sort&quot;, text(sort)));</span>
+  }
+
+  private static AttributeValue text(String value) {
+<span class="fc" id="L358">    return AttributeValue.builder().s(value).build();</span>
+  }
+
+  private static AttributeValue number(int value) {
+<span class="fc" id="L362">    return AttributeValue.builder().n(Integer.toString(value)).build();</span>
+  }
+
+  private static String string(Map&lt;String, AttributeValue&gt; item, String name) {
+<span class="fc" id="L366">    return item.get(name).s();</span>
+  }
+
+  private static int integer(Map&lt;String, AttributeValue&gt; item, String name) {
+<span class="fc" id="L370">    return Integer.parseInt(item.get(name).n());</span>
+  }
+
+  private static String sortable(Instant value) {
+<span class="fc" id="L374">    return String.format(java.util.Locale.ROOT, &quot;%020d#&quot;, value.toEpochMilli());</span>
+  }
+
+  private static String bucket(TicketState state) {
+<span class="fc bfc" id="L378" title="All 5 branches covered.">    return switch (state) {</span>
+<span class="fc" id="L379">      case AVAILABLE -&gt; &quot;available&quot;;</span>
+<span class="fc" id="L380">      case RESERVED -&gt; &quot;reserved&quot;;</span>
+<span class="fc" id="L381">      case PENDING_CONFIRMATION -&gt; &quot;pending&quot;;</span>
+<span class="fc" id="L382">      case SOLD -&gt; &quot;sold&quot;;</span>
+<span class="fc" id="L383">      case COMPLIMENTARY -&gt; &quot;complimentary&quot;;</span>
+    };
+  }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

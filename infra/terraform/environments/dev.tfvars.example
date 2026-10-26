@@ -1,0 +1,13 @@
+aws_region     = "us-east-1"
+aws_account_id = "123456789012"
+environment    = "dev"
+owner          = "ticketing-team"
+cost_center    = "engineering"
+vpc_cidr       = "10.42.0.0/16"
+client_cidrs   = ["10.99.0.0/24"]
+certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/REPLACE_WITH_REAL_CERTIFICATE"
+enable_service = false
+minimum_tasks  = 2
+maximum_tasks  = 4
+# Set image_digest only after scanning and pushing the image.
+# Set admin_secret_arn only when an existing Secrets Manager secret is available.

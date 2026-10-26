@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Model.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">ticketing</a> &gt; <a href="index.source.html" class="el_package">com.example.ticketing.domain</a> &gt; <span class="el_source">Model.java</span></div><h1>Model.java</h1><pre class="source lang-java linenums">package com.example.ticketing.domain;
+
+import java.time.Instant;
+
+public final class Model {
+  private Model() {}
+
+<span class="fc" id="L8">  public enum TicketState {</span>
+<span class="fc" id="L9">    AVAILABLE,</span>
+<span class="fc" id="L10">    RESERVED,</span>
+<span class="fc" id="L11">    PENDING_CONFIRMATION,</span>
+<span class="fc" id="L12">    SOLD,</span>
+<span class="fc" id="L13">    COMPLIMENTARY</span>
+  }
+
+<span class="fc" id="L16">  public enum OrderStatus {</span>
+<span class="fc" id="L17">    QUEUED,</span>
+<span class="fc" id="L18">    RESERVED,</span>
+<span class="fc" id="L19">    PENDING_CONFIRMATION,</span>
+<span class="fc" id="L20">    SOLD,</span>
+<span class="fc" id="L21">    COMPLIMENTARY,</span>
+<span class="fc" id="L22">    EXPIRED,</span>
+<span class="fc" id="L23">    REJECTED</span>
+  }
+
+<span class="fc" id="L26">  public record Event(</span>
+      String id,
+      String name,
+      Instant date,
+      String venue,
+      int capacity,
+      int available,
+      int reserved,
+      int pending,
+      int sold,
+      int complimentary) {}
+
+<span class="fc" id="L38">  public record Order(</span>
+      String id,
+      String eventId,
+      String customerId,
+      int quantity,
+      OrderStatus status,
+      Instant expiresAt,
+      Instant createdAt,
+      boolean courtesy) {
+    public TicketState ticketState() {
+<span class="fc bfc" id="L48" title="All 5 branches covered.">      return switch (status) {</span>
+<span class="fc" id="L49">        case RESERVED -&gt; TicketState.RESERVED;</span>
+<span class="fc" id="L50">        case PENDING_CONFIRMATION -&gt; TicketState.PENDING_CONFIRMATION;</span>
+<span class="fc" id="L51">        case SOLD -&gt; TicketState.SOLD;</span>
+<span class="fc" id="L52">        case COMPLIMENTARY -&gt; TicketState.COMPLIMENTARY;</span>
+<span class="fc" id="L53">        default -&gt; null;</span>
+      };
+    }
+  }
+
+<span class="fc" id="L58">  public record Audit(String id, String orderId, String from, String to, Instant at) {}</span>
+
+<span class="fc" id="L60">  public record Outbox(String id, String orderId) {}</span>
+
+  public static class Conflict extends RuntimeException {
+    public Conflict(String message) {
+<span class="fc" id="L64">      super(message);</span>
+<span class="fc" id="L65">    }</span>
+  }
+
+  public static class Missing extends RuntimeException {
+    public Missing(String message) {
+<span class="fc" id="L70">      super(message);</span>
+<span class="fc" id="L71">    }</span>
+  }
+
+  public static class ConcurrentChange extends RuntimeException {
+    public ConcurrentChange(Throwable cause) {
+<span class="fc" id="L76">      super(&quot;Concurrent inventory or order change&quot;, cause);</span>
+<span class="fc" id="L77">    }</span>
+  }
+
+  public static class TransientStoreFailure extends RuntimeException {
+    public TransientStoreFailure(Throwable cause) {
+<span class="fc" id="L82">      super(&quot;Temporary persistence failure&quot;, cause);</span>
+<span class="fc" id="L83">    }</span>
+  }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

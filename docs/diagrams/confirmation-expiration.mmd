@@ -1,0 +1,31 @@
+sequenceDiagram
+    autonumber
+    actor Client as Cliente
+    participant API as API / caso de uso
+    participant DB as DynamoDB
+    participant Queue as Outbox / SQS / consumidor
+    participant Expirer as Expirador
+    Client->>API: POST /orders/{id}/confirm
+    API->>DB: GetItem orden (consistentRead)
+    alt RESERVED y plazo vigente
+        API->>DB: TransactWrite: expected RESERVED → PENDING_CONFIRMATION + contadores + audit + outbox
+        DB-->>API: Commit (mismo vencimiento)
+        API-->>Client: 202
+        Queue->>DB: Leer PENDING_CONFIRMATION
+        alt Consumidor comprueba plazo vigente
+            Queue->>DB: TransactWrite: expected PENDING_CONFIRMATION → SOLD + contadores + audit
+            DB-->>Queue: Commit
+            Note over Queue,DB: Acuse SQS solo tras completar el commit
+        else Consumidor observa plazo vencido
+            Queue->>DB: TransactWrite: expected PENDING_CONFIRMATION → EXPIRED + devolver cupo + audit
+        end
+    else Reserva ya vencida
+        API->>DB: TransactWrite: RESERVED → EXPIRED + devolver cupo + audit
+        API-->>Client: Estado EXPIRED
+    end
+    Expirer->>DB: Query GSI ACTIVE con vencimiento <= ahora
+    DB-->>Expirer: Candidatos eventualmente consistentes
+    Expirer->>DB: Releer cada orden en forma consistente
+    Expirer->>DB: Si sigue vencida: transición condicionada y devolución atómica
+    Note over DB,Expirer: Si otra transacción ganó, se relee; no se duplica la devolución
+    Note over API,Queue: SOLD y COMPLIMENTARY no tienen transiciones de salida

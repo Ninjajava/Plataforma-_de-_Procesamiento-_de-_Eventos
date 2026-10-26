@@ -1,0 +1,11 @@
+tests\architecture.tftest.hcl... in progress
+  run "private_foundation"... pass
+  run "immutable_service"... pass
+  run "reject_public_ingress"... pass
+  run "reject_missing_image"... pass
+  run "reject_invalid_environment"... pass
+  run "reject_invalid_scale_bounds"... pass
+tests\architecture.tftest.hcl... tearing down
+tests\architecture.tftest.hcl... pass
+
+Success! 6 passed, 0 failed.

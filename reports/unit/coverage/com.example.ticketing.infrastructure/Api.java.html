@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Api.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">ticketing</a> &gt; <a href="index.source.html" class="el_package">com.example.ticketing.infrastructure</a> &gt; <span class="el_source">Api.java</span></div><h1>Api.java</h1><pre class="source lang-java linenums">package com.example.ticketing.infrastructure;
+
+import com.example.ticketing.application.TicketService;
+import com.example.ticketing.domain.Model.*;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.*;
+import java.time.Instant;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
+import org.springframework.web.bind.annotation.*;
+import reactor.core.publisher.*;
+
+@RestController
+@RequestMapping(&quot;/api&quot;)
+public class Api {
+  private final TicketService service;
+  private final String adminKey;
+
+<span class="fc" id="L19">  public Api(TicketService service, @Value(&quot;${ticketing.admin-key:}&quot;) String adminKey) {</span>
+<span class="fc" id="L20">    this.service = service;</span>
+<span class="fc" id="L21">    this.adminKey = adminKey;</span>
+<span class="fc" id="L22">  }</span>
+
+<span class="fc" id="L24">  public record CreateEvent(</span>
+      @NotBlank @Size(max = 200) String name,
+      @NotNull @Future Instant date,
+      @NotBlank @Size(max = 300) String venue,
+      @Min(1) int capacity) {}
+
+<span class="fc" id="L30">  public record Buy(</span>
+      @NotBlank String eventId,
+      @NotBlank @Size(max = 200) String customerId,
+      @Min(1) @Max(20) int quantity) {}
+
+<span class="fc" id="L35">  public record OrderView(Order order, TicketState ticketState) {}</span>
+
+  @PostMapping(&quot;/events&quot;)
+  @ResponseStatus(HttpStatus.CREATED)
+  public Mono&lt;Event&gt; create(@Valid @RequestBody CreateEvent request) {
+<span class="fc" id="L40">    return service.create(request.name(), request.date(), request.venue(), request.capacity());</span>
+  }
+
+  @GetMapping(&quot;/events&quot;)
+  public Flux&lt;Event&gt; events() {
+<span class="fc" id="L45">    return service.events();</span>
+  }
+
+  @GetMapping(&quot;/events/{id}/availability&quot;)
+  public Mono&lt;Event&gt; event(@PathVariable String id) {
+<span class="fc" id="L50">    return service.event(id);</span>
+  }
+
+  @PostMapping(&quot;/orders&quot;)
+  @ResponseStatus(HttpStatus.ACCEPTED)
+  public Mono&lt;OrderView&gt; buy(
+      @RequestHeader(&quot;Idempotency-Key&quot;) String key, @Valid @RequestBody Buy request) {
+<span class="fc bfc" id="L57" title="All 2 branches covered.">    if (!key.matches(&quot;[a-zA-Z0-9_-]{8,100}&quot;))</span>
+<span class="fc" id="L58">      return Mono.error(</span>
+          new IllegalArgumentException(
+              &quot;Idempotency-Key must contain 8 to 100 letters, digits, hyphens or underscores&quot;));
+<span class="fc" id="L61">    return service</span>
+<span class="fc" id="L62">        .buy(key, request.eventId(), request.customerId(), request.quantity(), false)</span>
+<span class="fc" id="L63">        .map(order -&gt; new OrderView(order, order.ticketState()));</span>
+  }
+
+  @GetMapping(&quot;/orders/{id}&quot;)
+  public Mono&lt;OrderView&gt; order(@PathVariable String id) {
+<span class="fc" id="L68">    return service.order(id).map(order -&gt; new OrderView(order, order.ticketState()));</span>
+  }
+
+  @PostMapping(&quot;/complimentary-orders&quot;)
+  @ResponseStatus(HttpStatus.ACCEPTED)
+  public Mono&lt;OrderView&gt; complimentary(
+      @RequestHeader(&quot;X-Admin-Key&quot;) String supplied,
+      @RequestHeader(&quot;Idempotency-Key&quot;) String key,
+      @Valid @RequestBody Buy request) {
+<span class="fc bfc" id="L77" title="All 2 branches covered.">    if (adminKey.isBlank()</span>
+<span class="fc bfc" id="L78" title="All 2 branches covered.">        || !java.security.MessageDigest.isEqual(</span>
+<span class="fc" id="L79">            adminKey.getBytes(java.nio.charset.StandardCharsets.UTF_8),</span>
+<span class="fc" id="L80">            supplied.getBytes(java.nio.charset.StandardCharsets.UTF_8)))</span>
+<span class="fc" id="L81">      return Mono.error(</span>
+          new org.springframework.web.server.ResponseStatusException(HttpStatus.FORBIDDEN));
+<span class="fc bfc" id="L83" title="All 2 branches covered.">    if (!key.matches(&quot;[a-zA-Z0-9_-]{8,100}&quot;))</span>
+<span class="fc" id="L84">      return Mono.error(new IllegalArgumentException(&quot;Invalid Idempotency-Key&quot;));</span>
+<span class="fc" id="L85">    return service</span>
+<span class="fc" id="L86">        .buy(key, request.eventId(), request.customerId(), request.quantity(), true)</span>
+<span class="fc" id="L87">        .map(order -&gt; new OrderView(order, order.ticketState()));</span>
+  }
+
+  @PostMapping(&quot;/orders/{id}/confirm&quot;)
+  @ResponseStatus(HttpStatus.ACCEPTED)
+  public Mono&lt;OrderView&gt; confirm(@PathVariable String id) {
+<span class="fc" id="L93">    return service.confirm(id).map(order -&gt; new OrderView(order, order.ticketState()));</span>
+  }
+
+  @GetMapping(&quot;/orders/{id}/audit&quot;)
+  public Flux&lt;Audit&gt; audit(@PathVariable String id) {
+<span class="fc" id="L98">    return service.audit(id);</span>
+  }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

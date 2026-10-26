@@ -1,0 +1,56 @@
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:2.5.4
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/home/dynamodblocal/data"]
+    user: root
+    ports: ["8000:8000"]
+    volumes: ["dynamo-data:/home/dynamodblocal/data"]
+  localstack:
+    image: localstack/localstack:4.0
+    ports: ["4566:4566"]
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+      SQS_ENDPOINT_STRATEGY: path
+    healthcheck:
+      test: ["CMD", "awslocal", "sqs", "list-queues"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  infrastructure-init:
+    image: amazon/aws-cli:2.22.26
+    depends_on:
+      dynamodb: {condition: service_started}
+      localstack: {condition: service_healthy}
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+    volumes: ["./infra:/infra:ro"]
+    entrypoint: ["/bin/sh", "/infra/init.sh"]
+  app:
+    build: .
+    ports: ["8080:8080"]
+    environment:
+      DYNAMODB_ENDPOINT: http://dynamodb:8000
+      DYNAMODB_TABLE: ticketing
+      SQS_ENDPOINT: http://localstack:4566
+      SQS_URL: http://localstack:4566/queue/us-east-1/000000000000/orders
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      TICKETING_ADMIN_KEY: ${TICKETING_ADMIN_KEY:-local-demo-change-me}
+    depends_on:
+      infrastructure-init: {condition: service_completed_successfully}
+  tests:
+    image: maven:3.9.11-eclipse-temurin-25
+    profiles: ["test"]
+    working_dir: /workspace
+    volumes: [".:/workspace"]
+    environment:
+      TEST_DYNAMODB_ENDPOINT: http://dynamodb:8000
+    depends_on:
+      infrastructure-init: {condition: service_completed_successfully}
+    command: ["mvn", "-B", "clean", "verify"]
+volumes:
+  dynamo-data:

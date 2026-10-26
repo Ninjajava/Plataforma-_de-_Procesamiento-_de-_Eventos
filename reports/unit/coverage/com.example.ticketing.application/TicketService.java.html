@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="es"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>TicketService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">ticketing</a> &gt; <a href="index.source.html" class="el_package">com.example.ticketing.application</a> &gt; <span class="el_source">TicketService.java</span></div><h1>TicketService.java</h1><pre class="source lang-java linenums">package com.example.ticketing.application;
+
+import com.example.ticketing.domain.Model.*;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.UUID;
+import java.util.function.Supplier;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
+
+public class TicketService {
+  private final TicketStore store;
+  private final Clock clock;
+
+<span class="fc" id="L17">  public TicketService(TicketStore store, Clock clock) {</span>
+<span class="fc" id="L18">    this.store = store;</span>
+<span class="fc" id="L19">    this.clock = clock;</span>
+<span class="fc" id="L20">  }</span>
+
+  public Mono&lt;Event&gt; create(String name, Instant date, String venue, int capacity) {
+<span class="fc" id="L23">    return store.create(</span>
+<span class="fc" id="L24">        new Event(UUID.randomUUID().toString(), name, date, venue, capacity, capacity, 0, 0, 0, 0));</span>
+  }
+
+  public Flux&lt;Event&gt; events() {
+<span class="fc" id="L28">    return store.events();</span>
+  }
+
+  public Mono&lt;Event&gt; event(String id) {
+<span class="fc" id="L32">    return store.event(id);</span>
+  }
+
+  public Mono&lt;Order&gt; order(String id) {
+<span class="fc" id="L36">    return store.order(id);</span>
+  }
+
+  public Flux&lt;Audit&gt; audit(String id) {
+<span class="fc" id="L40">    return store.audit(id);</span>
+  }
+
+  public Mono&lt;Order&gt; buy(
+      String key, String eventId, String customerId, int quantity, boolean courtesy) {
+<span class="fc" id="L45">    return retried(</span>
+        () -&gt;
+<span class="fc" id="L47">            store</span>
+<span class="fc" id="L48">                .event(eventId)</span>
+<span class="fc" id="L49">                .then(</span>
+<span class="fc" id="L50">                    store.submit(</span>
+                        new Order(
+                            key,
+                            eventId,
+                            customerId,
+                            quantity,
+                            OrderStatus.QUEUED,
+                            null,
+<span class="fc" id="L58">                            clock.instant(),</span>
+                            courtesy))));
+  }
+
+  public Mono&lt;Void&gt; reserve(String id) {
+<span class="fc" id="L63">    return retried(</span>
+            () -&gt;
+<span class="fc" id="L65">                store</span>
+<span class="fc" id="L66">                    .order(id)</span>
+<span class="fc" id="L67">                    .flatMap(</span>
+                        order -&gt;
+<span class="fc bfc" id="L69" title="All 3 branches covered.">                            switch (order.status()) {</span>
+                              case QUEUED -&gt;
+<span class="fc" id="L71">                                  store</span>
+<span class="fc" id="L72">                                      .event(order.eventId())</span>
+<span class="fc" id="L73">                                      .flatMap(</span>
+                                          event -&gt; {
+<span class="fc bfc" id="L75" title="All 2 branches covered.">                                            if (event.available() &lt; order.quantity()) {</span>
+<span class="fc" id="L76">                                              return store.transition(</span>
+                                                  order,
+                                                  OrderStatus.REJECTED,
+                                                  null,
+                                                  null,
+                                                  null,
+                                                  false);
+                                            }
+<span class="fc" id="L84">                                            return store.transition(</span>
+                                                order,
+<span class="fc bfc" id="L86" title="All 2 branches covered.">                                                order.courtesy()</span>
+<span class="fc" id="L87">                                                    ? OrderStatus.COMPLIMENTARY</span>
+<span class="fc" id="L88">                                                    : OrderStatus.RESERVED,</span>
+<span class="fc bfc" id="L89" title="All 2 branches covered.">                                                order.courtesy()</span>
+<span class="fc" id="L90">                                                    ? null</span>
+<span class="fc" id="L91">                                                    : clock.instant().plusSeconds(600),</span>
+                                                TicketState.AVAILABLE,
+<span class="fc bfc" id="L93" title="All 2 branches covered.">                                                order.courtesy()</span>
+<span class="fc" id="L94">                                                    ? TicketState.COMPLIMENTARY</span>
+<span class="fc" id="L95">                                                    : TicketState.RESERVED,</span>
+                                                false);
+                                          });
+                              case PENDING_CONFIRMATION -&gt;
+<span class="fc bfc" id="L99" title="All 2 branches covered.">                                  isExpired(order)</span>
+<span class="fc" id="L100">                                      ? release(order)</span>
+<span class="fc" id="L101">                                      : store.transition(</span>
+                                          order,
+                                          OrderStatus.SOLD,
+                                          null,
+                                          TicketState.PENDING_CONFIRMATION,
+                                          TicketState.SOLD,
+                                          false);
+<span class="fc" id="L108">                              default -&gt; Mono.just(order);</span>
+                            }))
+<span class="fc" id="L110">        .then();</span>
+  }
+
+  public Mono&lt;Order&gt; confirm(String id) {
+<span class="fc" id="L114">    return retried(</span>
+        () -&gt;
+<span class="fc" id="L116">            store</span>
+<span class="fc" id="L117">                .order(id)</span>
+<span class="fc" id="L118">                .flatMap(</span>
+                    order -&gt;
+<span class="fc bfc" id="L120" title="All 3 branches covered.">                        switch (order.status()) {</span>
+<span class="fc" id="L121">                          case SOLD, PENDING_CONFIRMATION -&gt; Mono.just(order);</span>
+                          case RESERVED -&gt;
+<span class="fc bfc" id="L123" title="All 2 branches covered.">                              isExpired(order)</span>
+<span class="fc" id="L124">                                  ? release(order)</span>
+<span class="fc" id="L125">                                  : store.transition(</span>
+                                      order,
+                                      OrderStatus.PENDING_CONFIRMATION,
+<span class="fc" id="L128">                                      order.expiresAt(),</span>
+                                      TicketState.RESERVED,
+                                      TicketState.PENDING_CONFIRMATION,
+                                      true);
+                          default -&gt;
+<span class="fc" id="L133">                              Mono.error(</span>
+                                  new Conflict(&quot;Only an active reservation can be confirmed&quot;));
+                        }));
+  }
+
+  public Mono&lt;Void&gt; expire() {
+<span class="fc" id="L139">    return Mono.defer(</span>
+        () -&gt;
+<span class="fc" id="L141">            store</span>
+<span class="fc" id="L142">                .expired(clock.instant())</span>
+<span class="fc" id="L143">                .flatMap(</span>
+                    candidate -&gt;
+<span class="fc" id="L145">                        retried(</span>
+                            () -&gt;
+<span class="fc" id="L147">                                store</span>
+<span class="fc" id="L148">                                    .order(candidate.id())</span>
+<span class="fc" id="L149">                                    .flatMap(</span>
+                                        order -&gt;
+<span class="fc bfc" id="L151" title="All 2 branches covered.">                                            (order.status() == OrderStatus.RESERVED</span>
+<span class="fc bfc" id="L152" title="All 2 branches covered.">                                                        || order.status()</span>
+                                                            == OrderStatus.PENDING_CONFIRMATION)
+<span class="fc bfc" id="L154" title="All 2 branches covered.">                                                    &amp;&amp; isExpired(order)</span>
+<span class="fc" id="L155">                                                ? release(order)</span>
+<span class="fc" id="L156">                                                : Mono.just(order))),</span>
+                    8)
+<span class="fc" id="L158">                .then());</span>
+  }
+
+  private boolean isExpired(Order order) {
+<span class="fc bfc" id="L162" title="All 2 branches covered.">    return !order.expiresAt().isAfter(clock.instant());</span>
+  }
+
+  private Mono&lt;Order&gt; release(Order order) {
+<span class="fc" id="L166">    return store.transition(</span>
+<span class="fc" id="L167">        order, OrderStatus.EXPIRED, null, order.ticketState(), TicketState.AVAILABLE, false);</span>
+  }
+
+  private &lt;T&gt; Mono&lt;T&gt; retried(Supplier&lt;Mono&lt;T&gt;&gt; operation) {
+<span class="fc" id="L171">    return Mono.defer(operation)</span>
+<span class="fc" id="L172">        .retryWhen(</span>
+<span class="fc" id="L173">            Retry.backoff(8, Duration.ofMillis(15))</span>
+<span class="fc" id="L174">                .maxBackoff(Duration.ofSeconds(1))</span>
+<span class="fc" id="L175">                .filter(</span>
+                    error -&gt;
+<span class="fc bfc" id="L177" title="All 4 branches covered.">                        error instanceof ConcurrentChange || error instanceof TransientStoreFailure)</span>
+<span class="fc" id="L178">                .onRetryExhaustedThrow((specification, signal) -&gt; signal.failure()));</span>
+  }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

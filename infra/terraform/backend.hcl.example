@@ -1,0 +1,7 @@
+bucket       = "REPLACE_WITH_BOOTSTRAPPED_STATE_BUCKET"
+key          = "ticketing/dev/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true
+# Use a different account, bucket and key for production.
+# Authentication comes from AWS IAM Identity Center or CI OIDC, never this file.

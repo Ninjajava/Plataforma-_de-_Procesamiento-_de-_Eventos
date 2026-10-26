@@ -1,0 +1,34 @@
+flowchart TB
+    Clients[Clientes privados por VPN / red corporativa existente] -->|HTTPS 443 y CIDR permitido| ALB
+    subgraph Environment[Cuenta AWS aislada por entorno — propuesta Terraform]
+        subgraph VPC[VPC sin IGW ni NAT]
+            ALB[ALB interno HTTPS / ACM]
+            subgraph AZA[Zona A: subred privada]
+                TaskA[Fargate: API + workers + expirador]
+            end
+            subgraph AZB[Zona B: subred privada]
+                TaskB[Fargate: API + workers + expirador]
+            end
+            ALB -->|SG a SG: 8080| TaskA
+            ALB -->|SG a SG: 8080| TaskB
+            VPCE[Endpoints privados ECR / SQS / Logs / Secrets]
+            Gateway[Gateway endpoints DynamoDB / S3]
+            TaskA --> VPCE
+            TaskB --> VPCE
+            TaskA --> Gateway
+            TaskB --> Gateway
+        end
+        VPCE --> ECR[ECR: scan y digest inmutable]
+        VPCE --> SQS[SQS Standard cifrado]
+        SQS --> DLQ[DLQ cifrada]
+        VPCE --> Logs[CloudWatch Logs / alarmas / dashboard]
+        VPCE --> Secrets[Secret existente opcional]
+        Gateway --> Dynamo[(DynamoDB on-demand + PITR)]
+        Gateway --> Layers[S3: capas ECR]
+        ALB --> Audit[S3: access logs]
+        IAM[IAM: task role y execution role separados]
+        KMS[KMS por entorno]
+    end
+    Logs --> SNS[SNS / correo opcional con confirmación]
+    State[S3 remoto versionado + KMS + lockfile] -. estado Terraform .-> Environment
+    Future[Entrada pública y OIDC/JWT: evolución pendiente] -. no desplegado ni implementado .-> Clients

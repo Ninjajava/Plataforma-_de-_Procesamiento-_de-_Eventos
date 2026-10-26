@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: reactive-ticketing
+  lifecycle:
+    timeout-per-shutdown-phase: 25s
+aws:
+  region: ${AWS_REGION:us-east-1}
+database:
+  endpoint: ${DYNAMODB_ENDPOINT:http://localhost:8000}
+  table: ${DYNAMODB_TABLE:ticketing}
+queue:
+  endpoint: ${SQS_ENDPOINT:http://localhost:4566}
+  url: ${SQS_URL:http://localhost:4566/queue/us-east-1/000000000000/orders}
+server:
+  port: 8080
+  shutdown: graceful
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
